@@ -836,9 +836,9 @@ async def on_interaction(interaction: discord.Interaction):
 
             embed = discord.Embed(
 
-                title="ShizoBot",
+                title="SchizoBot",
 
-                description="Привет, Ебланчик!\n\nЭто ShizoBot — разработан специально для SHIZORAGE FAMQ.\n\nДля продолжения определись, что тебе необходимо.",
+                description="Привет, Ебланчик!\n\nЭто SchizoBot — разработан специально для SHIZORAGE FAMQ.\n\nДля продолжения определись, что тебе необходимо.",
 
                 color=discord.Color.blurple()
 
@@ -846,7 +846,7 @@ async def on_interaction(interaction: discord.Interaction):
 
             embed.set_thumbnail(url=bot.user.avatar.url if bot.user.avatar else bot.user.default_avatar.url)
 
-            embed.set_footer(text="ShizoBot v3.0 | 2025")
+            embed.set_footer(text="SchizoBot v3.0 | 2025")
 
             view = InfoView(bot, interaction.user)
 
