@@ -46,7 +46,7 @@ load_dotenv()
 
 TOKEN = os.getenv("DISCORD_TOKEN")
 
-GUILD_ID = int(os.getenv("GUILD_ID", "1016700044772130837"))
+GUILD_ID = int(os.getenv("GUILD_ID", "1382063308471013566"))
 
 AFK_CHANNEL_ID = int(os.getenv("AFK_CHANNEL_ID", "1444411445608583372"))
 
