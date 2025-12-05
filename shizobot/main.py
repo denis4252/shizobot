@@ -288,7 +288,7 @@ class MyBot(commands.Bot):
                 return
 
             table_lines = []
-            table_lines.append("```")
+            table_lines.append("```
             table_lines.append("╔══════════════════════════════════════════════════════════════════╗")
             table_lines.append("║                    📋 СПИСОК АФК                                ║")
             table_lines.append("╠══════════════════════════════════════════════════════════════════╣")
@@ -351,36 +351,14 @@ class AfkControlView(discord.ui.View):
     @discord.ui.button(label="📋 АФК-лист", style=discord.ButtonStyle.primary, custom_id="open_afklist")
     async def open_afklist(self, interaction: discord.Interaction, button: discord.ui.Button):
         try:
-            if not interaction.user.guild_permissions.administrator:
-                msg = await interaction.response.send_message(
-                    "Эта кнопка только для администраторов.",
-                    ephemeral=True,
-                    delete_after=10
-                )
-                asyncio.create_task(bot._delete_after_custom(msg, 10))
-                return
-
             await interaction.response.defer(ephemeral=True)
-
-            embed = discord.Embed(
-                title="📋 АФК Панель",
-                description="Загрузка списка...",
-                color=discord.Color.gold()
-            )
-
-            if self.bot_instance.afklist_message is None:
-                msg = await interaction.channel.send(embed=embed)
-                self.bot_instance.afklist_message = msg
-                self.bot_instance.afklist_channel = interaction.channel
-            else:
-                await self.bot_instance.afklist_message.edit(embed=embed)
-
+            
             await self.bot_instance.update_afk_panel()
             
             await interaction.followup.send("✅ АФК-лист обновлён!", ephemeral=True, delete_after=5)
         except Exception as e:
             await interaction.followup.send(
-                f"Ошибка при открытии АФК панели: {str(e)}",
+                f"Ошибка при обновлении АФК панели: {str(e)}",
                 ephemeral=True,
                 delete_after=15
             )
