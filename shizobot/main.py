@@ -5,30 +5,7 @@ import aiosqlite
 import datetime
 import asyncio
 import os
-import time
 from dotenv import load_dotenv
-from flask import Flask
-import threading
-
-# ========== FLASK СЕРВЕР ДЛЯ RENDER ==========
-app = Flask(__name__)
-
-@app.route('/')
-def health_check():
-    """Проверка здоровья для Render"""
-    return "Bot is running!", 200
-
-def run_flask():
-    """Запустить Flask на порту 10000"""
-    port = int(os.getenv("PORT", 10000))
-    app.run(host="0.0.0.0", port=port, debug=False)
-
-# Запустить Flask в отдельном потоке ДО запуска бота
-flask_thread = threading.Thread(target=run_flask, daemon=True)
-flask_thread.start()
-print(f"🌐 Flask сервер запущен на порту {os.getenv('PORT', 10000)}")
-
-# ========== КОНЕЦ FLASK КОНФИГУРАЦИИ ==========
 
 # Загружаем токен из .env файла
 load_dotenv()
@@ -41,7 +18,6 @@ SUPPORT_ROLE_ID = int(os.getenv("SUPPORT_ROLE_ID", "1444005551628353587"))
 BROADCAST_ROLE_ID = int(os.getenv("BROADCAST_ROLE_ID", "1444005594985005207"))
 WARNS_LOG_CHANNEL_ID = int(os.getenv("WARNS_LOG_CHANNEL_ID", "1234567890123456789"))
 TICKETS_CATEGORY_ID = int(os.getenv("TICKETS_CATEGORY_ID", "1234567890123456789"))
-AFK_PANEL_CHANNEL_ID = 1443454810589368320
 
 if not TOKEN:
     raise ValueError("DISCORD_TOKEN не найден в .env файле!")
@@ -204,8 +180,6 @@ class MyBot(commands.Bot):
         super().__init__(command_prefix="!", intents=discord.Intents.all())
         self.synced = False
         self.db = None
-        self.afklist_message = None
-        self.afklist_channel = None
         self.afk_chat_messages = {}  # Словарь для отслеживания сообщений в чатах (channel_id: message_id)
 
     async def setup_hook(self):
@@ -249,31 +223,7 @@ class MyBot(commands.Bot):
 
         print(f"✅ Бот {self.user} запущен и готов к работе!")
         self.cleanup_afk_list.start()
-        self.update_afk_panel.start()
         self.update_afk_chat_messages.start()
-
-        # Отправка сообщения с кнопками в фиксированный канал
-        try:
-            channel = self.get_channel(AFK_PANEL_CHANNEL_ID)
-            if channel:
-                # Удаляем старые сообщения бота
-                deleted_count = 0
-                async for msg in channel.history(limit=50):
-                    if msg.author == self.user and deleted_count < 10:
-                        try:
-                            await msg.delete()
-                            deleted_count += 1
-                        except:
-                            pass
-                
-                view = AfkControlView(self)
-                await channel.send(
-                    "📋 **Управление АФК**\n\nНажимай на кнопки ниже:",
-                    view=view
-                )
-                print(f"Сообщение с AFK-кнопками отправлено в канал {AFK_PANEL_CHANNEL_ID}")
-        except Exception as e:
-            print(f"Ошибка при отправке сообщения с AFK-кнопками: {e}")
 
     async def close(self):
         if self.db:
@@ -294,79 +244,6 @@ class MyBot(commands.Bot):
             print(f"Ошибка при очистке АФК списка: {e}")
 
     @tasks.loop(minutes=1)
-    async def update_afk_panel(self):
-        """Обновляет АФК панель каждую минуту"""
-        if not self.afklist_message or not self.afklist_channel:
-            return
-
-        try:
-            async with self.db.execute(
-                "SELECT user_id, reason, afk_time, return_time FROM afk_users ORDER BY return_time ASC"
-            ) as cursor:
-                afk_data = await cursor.fetchall()
-
-            if not afk_data:
-                embed = discord.Embed(
-                    title="📋 АФК Панель",
-                    description="В АФК никого нет!",
-                    color=discord.Color.green()
-                )
-                embed.set_footer(text=f"Обновлено: {datetime.datetime.now().strftime('%H:%M:%S')}")
-                await self.afklist_message.edit(embed=embed)
-                return
-
-            table_lines = []
-            table_lines.append("```")
-            table_lines.append("╔══════════════════════════════════════════════════════════════════╗")
-            table_lines.append("║                    📋 СПИСОК АФК                                ║")
-            table_lines.append("╠══════════════════════════════════════════════════════════════════╣")
-
-            for user_id, reason, afk_time, return_time in afk_data:
-                try:
-                    guild = self.get_guild(AFK_GUILD_ID) or self.get_guild(GUILD_ID)
-                    member = None
-                    if guild:
-                        member = guild.get_member(user_id)
-                    
-                    if member:
-                        user_name = member.display_name[:18]
-                    else:
-                        user = await self.fetch_user(user_id)
-                        user_name = (user.global_name or user.name)[:18]
-                except:
-                    user_name = "Unknown"
-
-                dt_return = datetime.datetime.fromisoformat(return_time)
-                now = datetime.datetime.now()
-                remaining = dt_return - now
-
-                if remaining.total_seconds() > 0:
-                    hours = int(remaining.total_seconds() // 3600)
-                    mins = int((remaining.total_seconds() % 3600) // 60)
-                    time_left = f"{hours}ч {mins}м" if hours > 0 else f"{mins}м"
-                else:
-                    time_left = "Скоро"
-
-                reason_short = reason[:28] if len(reason) <= 28 else reason[:25] + "..."
-
-                table_lines.append(f"║ 👤 {user_name:<18} │ ⏱️ {time_left:<8}                    ║")
-                table_lines.append(f"║ 📝 Причина: {reason_short:<45} ║")
-                table_lines.append("║" + "─" * 66 + "║")
-
-            table_lines.append("╚══════════════════════════════════════════════════════════════════╝")
-            table_lines.append("```")
-
-            embed = discord.Embed(
-                title="📋 АФК Панель",
-                description="\n".join(table_lines),
-                color=discord.Color.gold()
-            )
-            embed.set_footer(text=f"Обновлено: {datetime.datetime.now().strftime('%H:%M:%S')} | Всего в АФК: {len(afk_data)}")
-            await self.afklist_message.edit(embed=embed)
-        except Exception as e:
-            print(f"Ошибка при обновлении АФК панели: {e}")
-
-    @tasks.loop(minutes=1)
     async def update_afk_chat_messages(self):
         """Обновляет АФК-лист в чатах каждую минуту"""
         await self.update_afk_chat_list()
@@ -376,7 +253,6 @@ class MyBot(commands.Bot):
         try:
             for channel_id, msg_id in list(self.afk_chat_messages.items()):
                 try:
-                    # Найти канал и сообщение
                     channel = self.get_channel(channel_id)
                     if not channel:
                         del self.afk_chat_messages[channel_id]
@@ -388,7 +264,6 @@ class MyBot(commands.Bot):
                         del self.afk_chat_messages[channel_id]
                         continue
                     
-                    # Получить текущие данные АФК
                     async with self.db.execute(
                         "SELECT user_id, reason, afk_time, return_time FROM afk_users ORDER BY return_time ASC"
                     ) as cursor:
@@ -460,7 +335,6 @@ class MyBot(commands.Bot):
     async def send_afk_list_to_chat(self, interaction: discord.Interaction):
         """Отправляет АФК-лист в чат (видят все) и сохраняет для обновления"""
         try:
-            # Удалить старое сообщение если оно есть в этом канале
             channel_id = interaction.channel.id
             if channel_id in self.afk_chat_messages:
                 try:
@@ -534,7 +408,6 @@ class MyBot(commands.Bot):
             )
             embed.set_footer(text=f"Запрошено: {datetime.datetime.now().strftime('%H:%M:%S')} | Всего в АФК: {len(afk_data)}")
             msg = await interaction.channel.send(embed=embed)
-            # Сохраняем ID сообщения для будущих обновлений
             self.afk_chat_messages[channel_id] = msg.id
         except Exception as e:
             print(f"Ошибка при отправке АФК-листа в чат: {e}")
@@ -547,10 +420,11 @@ class AfkControlView(discord.ui.View):
     def __init__(self, bot_instance):
         super().__init__(timeout=None)
         self.bot_instance = bot_instance
-        self.button_cooldowns = {}  # Словарь для кулдаунов
+        self.button_cooldowns = {}
 
     def check_cooldown(self, user_id: int, cooldown_time: int = 300) -> tuple:
         """Проверка кулдауна (300 сек = 5 минут)"""
+        import time
         current_time = time.time()
         
         if user_id in self.button_cooldowns:
@@ -565,7 +439,6 @@ class AfkControlView(discord.ui.View):
     @discord.ui.button(label="📋 АФК-лист", style=discord.ButtonStyle.primary, custom_id="open_afklist")
     async def open_afklist(self, interaction: discord.Interaction, button: discord.ui.Button):
         try:
-            # Проверка кулдауна
             can_use, remaining = self.check_cooldown(interaction.user.id, cooldown_time=300)
             
             if not can_use:
@@ -579,8 +452,6 @@ class AfkControlView(discord.ui.View):
                 return
             
             await interaction.response.defer(ephemeral=True)
-            
-            # Отправляем АФК-лист в чат (видят все)
             await self.bot_instance.send_afk_list_to_chat(interaction)
             
             msg = await interaction.followup.send("✅ АФК-лист отправлен в чат и будет обновляться каждую минуту!", ephemeral=True)
