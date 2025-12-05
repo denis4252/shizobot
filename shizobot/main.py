@@ -941,11 +941,20 @@ async def on_app_command_error(interaction: discord.Interaction, error: app_comm
 
 # ---------- ЗАПУСК БОТА И FLASK ----------
 
+# ---------- ЗАПУСК БОТА И FLASK ----------
+
 if __name__ == "__main__":
+    import time
+    
     # Запускаем Flask в отдельном потоке
     flask_thread = threading.Thread(target=run_flask, daemon=True)
     flask_thread.start()
-    print("✅ Flask сервер запущен для Render.com health check")
+    
+    # Даём Flask 2 секунды на запуск
+    time.sleep(2)
+    
+    port = int(os.getenv("PORT", 10000))
+    print(f"✅ Flask сервер запущен для Render.com на порту {port}")
     
     # Запускаем Discord бота
     bot.run(TOKEN)
