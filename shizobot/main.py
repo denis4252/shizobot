@@ -5,6 +5,7 @@ import aiosqlite
 import datetime
 import asyncio
 import os
+import time
 from dotenv import load_dotenv
 from flask import Flask
 import threading
@@ -205,6 +206,7 @@ class MyBot(commands.Bot):
         self.db = None
         self.afklist_message = None
         self.afklist_channel = None
+        self.afk_chat_messages = {}  # Словарь для отслеживания сообщений в чатах (channel_id: message_id)
 
     async def setup_hook(self):
         self.db = await aiosqlite.connect("SchizoBot.db")
@@ -248,6 +250,7 @@ class MyBot(commands.Bot):
         print(f"✅ Бот {self.user} запущен и готов к работе!")
         self.cleanup_afk_list.start()
         self.update_afk_panel.start()
+        self.update_afk_chat_messages.start()
 
         # Отправка сообщения с кнопками в фиксированный канал
         try:
@@ -363,6 +366,179 @@ class MyBot(commands.Bot):
         except Exception as e:
             print(f"Ошибка при обновлении АФК панели: {e}")
 
+    @tasks.loop(minutes=1)
+    async def update_afk_chat_messages(self):
+        """Обновляет АФК-лист в чатах каждую минуту"""
+        await self.update_afk_chat_list()
+
+    async def update_afk_chat_list(self):
+        """Обновляет АФК-лист в чатах каждую минуту"""
+        try:
+            for channel_id, msg_id in list(self.afk_chat_messages.items()):
+                try:
+                    # Найти канал и сообщение
+                    channel = self.get_channel(channel_id)
+                    if not channel:
+                        del self.afk_chat_messages[channel_id]
+                        continue
+                    
+                    try:
+                        msg = await channel.fetch_message(msg_id)
+                    except discord.NotFound:
+                        del self.afk_chat_messages[channel_id]
+                        continue
+                    
+                    # Получить текущие данные АФК
+                    async with self.db.execute(
+                        "SELECT user_id, reason, afk_time, return_time FROM afk_users ORDER BY return_time ASC"
+                    ) as cursor:
+                        afk_data = await cursor.fetchall()
+
+                    if not afk_data:
+                        embed = discord.Embed(
+                            title="📋 АФК Панель",
+                            description="В АФК никого нет!",
+                            color=discord.Color.green()
+                        )
+                        embed.set_footer(text=f"Обновлено: {datetime.datetime.now().strftime('%H:%M:%S')}")
+                        await msg.edit(embed=embed)
+                        continue
+
+                    table_lines = []
+                    table_lines.append("```")
+                    table_lines.append("╔══════════════════════════════════════════════════════════════════╗")
+                    table_lines.append("║                    📋 СПИСОК АФК                                ║")
+                    table_lines.append("╠══════════════════════════════════════════════════════════════════╣")
+
+                    for user_id, reason, afk_time, return_time in afk_data:
+                        try:
+                            guild = self.get_guild(AFK_GUILD_ID) or self.get_guild(GUILD_ID)
+                            member = None
+                            if guild:
+                                member = guild.get_member(user_id)
+                            
+                            if member:
+                                user_name = member.display_name[:18]
+                            else:
+                                user = await self.fetch_user(user_id)
+                                user_name = (user.global_name or user.name)[:18]
+                        except:
+                            user_name = "Unknown"
+
+                        dt_return = datetime.datetime.fromisoformat(return_time)
+                        now = datetime.datetime.now()
+                        remaining = dt_return - now
+
+                        if remaining.total_seconds() > 0:
+                            hours = int(remaining.total_seconds() // 3600)
+                            mins = int((remaining.total_seconds() % 3600) // 60)
+                            time_left = f"{hours}ч {mins}м" if hours > 0 else f"{mins}м"
+                        else:
+                            time_left = "Скоро"
+
+                        reason_short = reason[:28] if len(reason) <= 28 else reason[:25] + "..."
+
+                        table_lines.append(f"║ 👤 {user_name:<18} │ ⏱️ {time_left:<8}                    ║")
+                        table_lines.append(f"║ 📝 Причина: {reason_short:<45} ║")
+                        table_lines.append("║" + "─" * 66 + "║")
+
+                    table_lines.append("╚══════════════════════════════════════════════════════════════════╝")
+                    table_lines.append("```")
+
+                    embed = discord.Embed(
+                        title="📋 АФК Панель",
+                        description="\n".join(table_lines),
+                        color=discord.Color.gold()
+                    )
+                    embed.set_footer(text=f"Обновлено: {datetime.datetime.now().strftime('%H:%M:%S')} | Всего в АФК: {len(afk_data)}")
+                    await msg.edit(embed=embed)
+                except Exception as e:
+                    print(f"Ошибка при обновлении АФК в канале {channel_id}: {e}")
+        except Exception as e:
+            print(f"Ошибка в update_afk_chat_list: {e}")
+
+    async def send_afk_list_to_chat(self, interaction: discord.Interaction):
+        """Отправляет АФК-лист в чат (видят все) и сохраняет для обновления"""
+        try:
+            # Удалить старое сообщение если оно есть в этом канале
+            channel_id = interaction.channel.id
+            if channel_id in self.afk_chat_messages:
+                try:
+                    old_msg_id = self.afk_chat_messages[channel_id]
+                    old_msg = await interaction.channel.fetch_message(old_msg_id)
+                    await old_msg.delete()
+                except:
+                    pass
+            
+            async with self.db.execute(
+                "SELECT user_id, reason, afk_time, return_time FROM afk_users ORDER BY return_time ASC"
+            ) as cursor:
+                afk_data = await cursor.fetchall()
+
+            if not afk_data:
+                embed = discord.Embed(
+                    title="📋 АФК Панель",
+                    description="В АФК никого нет!",
+                    color=discord.Color.green()
+                )
+                embed.set_footer(text=f"Запрошено: {datetime.datetime.now().strftime('%H:%M:%S')}")
+                msg = await interaction.channel.send(embed=embed)
+                self.afk_chat_messages[channel_id] = msg.id
+                return
+
+            table_lines = []
+            table_lines.append("```")
+            table_lines.append("╔══════════════════════════════════════════════════════════════════╗")
+            table_lines.append("║                    📋 СПИСОК АФК                                ║")
+            table_lines.append("╠══════════════════════════════════════════════════════════════════╣")
+
+            for user_id, reason, afk_time, return_time in afk_data:
+                try:
+                    guild = self.get_guild(AFK_GUILD_ID) or self.get_guild(GUILD_ID)
+                    member = None
+                    if guild:
+                        member = guild.get_member(user_id)
+                    
+                    if member:
+                        user_name = member.display_name[:18]
+                    else:
+                        user = await self.fetch_user(user_id)
+                        user_name = (user.global_name or user.name)[:18]
+                except:
+                    user_name = "Unknown"
+
+                dt_return = datetime.datetime.fromisoformat(return_time)
+                now = datetime.datetime.now()
+                remaining = dt_return - now
+
+                if remaining.total_seconds() > 0:
+                    hours = int(remaining.total_seconds() // 3600)
+                    mins = int((remaining.total_seconds() % 3600) // 60)
+                    time_left = f"{hours}ч {mins}м" if hours > 0 else f"{mins}м"
+                else:
+                    time_left = "Скоро"
+
+                reason_short = reason[:28] if len(reason) <= 28 else reason[:25] + "..."
+
+                table_lines.append(f"║ 👤 {user_name:<18} │ ⏱️ {time_left:<8}                    ║")
+                table_lines.append(f"║ 📝 Причина: {reason_short:<45} ║")
+                table_lines.append("║" + "─" * 66 + "║")
+
+            table_lines.append("╚══════════════════════════════════════════════════════════════════╝")
+            table_lines.append("```")
+
+            embed = discord.Embed(
+                title="📋 АФК Панель",
+                description="\n".join(table_lines),
+                color=discord.Color.gold()
+            )
+            embed.set_footer(text=f"Запрошено: {datetime.datetime.now().strftime('%H:%M:%S')} | Всего в АФК: {len(afk_data)}")
+            msg = await interaction.channel.send(embed=embed)
+            # Сохраняем ID сообщения для будущих обновлений
+            self.afk_chat_messages[channel_id] = msg.id
+        except Exception as e:
+            print(f"Ошибка при отправке АФК-листа в чат: {e}")
+
 bot = MyBot()
 
 # ---------- VIEWS (КНОПКИ) ----------
@@ -371,22 +547,53 @@ class AfkControlView(discord.ui.View):
     def __init__(self, bot_instance):
         super().__init__(timeout=None)
         self.bot_instance = bot_instance
+        self.button_cooldowns = {}  # Словарь для кулдаунов
+
+    def check_cooldown(self, user_id: int, cooldown_time: int = 300) -> tuple:
+        """Проверка кулдауна (300 сек = 5 минут)"""
+        current_time = time.time()
+        
+        if user_id in self.button_cooldowns:
+            last_used = self.button_cooldowns[user_id]
+            if current_time - last_used < cooldown_time:
+                remaining = cooldown_time - (current_time - last_used)
+                return False, remaining
+        
+        self.button_cooldowns[user_id] = current_time
+        return True, 0
 
     @discord.ui.button(label="📋 АФК-лист", style=discord.ButtonStyle.primary, custom_id="open_afklist")
     async def open_afklist(self, interaction: discord.Interaction, button: discord.ui.Button):
         try:
+            # Проверка кулдауна
+            can_use, remaining = self.check_cooldown(interaction.user.id, cooldown_time=300)
+            
+            if not can_use:
+                minutes = int(remaining // 60)
+                seconds = int(remaining % 60)
+                msg = await interaction.response.send_message(
+                    f"⏳ Подождите {minutes}м {seconds}с перед следующим обновлением",
+                    ephemeral=True
+                )
+                asyncio.create_task(self.bot_instance._delete_after_custom(msg, 5))
+                return
+            
             await interaction.response.defer(ephemeral=True)
             
-            await self.bot_instance.update_afk_panel()
+            # Отправляем АФК-лист в чат (видят все)
+            await self.bot_instance.send_afk_list_to_chat(interaction)
             
-            msg = await interaction.followup.send("✅ АФК-лист обновлён!", ephemeral=True)
+            msg = await interaction.followup.send("✅ АФК-лист отправлен в чат и будет обновляться каждую минуту!", ephemeral=True)
             asyncio.create_task(self.bot_instance._delete_after_custom(msg, 5))
         except Exception as e:
-            msg = await interaction.followup.send(
-                f"Ошибка при обновлении АФК панели: {str(e)}",
-                ephemeral=True
-            )
-            asyncio.create_task(self.bot_instance._delete_after_custom(msg, 15))
+            try:
+                msg = await interaction.followup.send(
+                    f"Ошибка при отправке АФК-листа: {str(e)}",
+                    ephemeral=True
+                )
+                asyncio.create_task(self.bot_instance._delete_after_custom(msg, 15))
+            except:
+                pass
 
     @discord.ui.button(label="😴 AFK", style=discord.ButtonStyle.secondary, custom_id="open_afk_modal")
     async def open_afk_modal(self, interaction: discord.Interaction, button: discord.ui.Button):
@@ -417,7 +624,7 @@ class InfoView(discord.ui.View):
         commands_list.append("📚 Общие команды")
         commands_list.append("• /help — Справка по всем командам")
         commands_list.append("• /afk — Установить статус АФК")
-        commands_list.append("• /afklist — Список людей в АФК")
+        commands_list.append("• /afklist — Список людей в АФК (только адм)")
         commands_list.append("• /unafk — Убрать себя из АФК")
         commands_list.append("• /warninfo — Посмотреть варны")
         commands_list.append("")
@@ -493,7 +700,7 @@ async def help_cmd(interaction: discord.Interaction):
         commands_list.append("📚 Общие команды")
         commands_list.append("• /help — Справка по всем командам")
         commands_list.append("• /afk — Установить статус АФК")
-        commands_list.append("• /afklist — Список людей в АФК")
+        commands_list.append("• /afklist — Список людей в АФК (только адм)")
         commands_list.append("• /unafk — Убрать себя из АФК")
         commands_list.append("• /warninfo — Посмотреть варны")
         commands_list.append("")
@@ -659,40 +866,87 @@ async def unafk(interaction: discord.Interaction):
 
 @bot.tree.command(
     name="afklist",
-    description="Список пользователей в АФК (обновляется каждую минуту)",
+    description="Список пользователей в АФК (только для админов)",
     guild=discord.Object(id=GUILD_ID)
 )
 @app_commands.checks.has_permissions(administrator=True)
 async def afklist(interaction: discord.Interaction):
     try:
-        if bot.afklist_message is not None:
-            msg = await interaction.response.send_message(
-                "⚠️ АФК панель уже создана! Используй её же для обновлений.",
-                ephemeral=True
+        await interaction.response.defer(ephemeral=True)
+
+        async with bot.db.execute(
+            "SELECT user_id, reason, afk_time, return_time FROM afk_users ORDER BY return_time ASC"
+        ) as cursor:
+            afk_data = await cursor.fetchall()
+
+        if not afk_data:
+            embed = discord.Embed(
+                title="📋 АФК Панель",
+                description="В АФК никого нет!",
+                color=discord.Color.green()
             )
+            embed.set_footer(text=f"Обновлено: {datetime.datetime.now().strftime('%H:%M:%S')}")
+            msg = await interaction.followup.send(embed=embed, ephemeral=True)
             asyncio.create_task(bot._delete_after_custom(msg, 180))
             return
 
-        await interaction.response.defer()
+        table_lines = []
+        table_lines.append("```")
+        table_lines.append("╔══════════════════════════════════════════════════════════════════╗")
+        table_lines.append("║                    📋 СПИСОК АФК                                ║")
+        table_lines.append("╠══════════════════════════════════════════════════════════════════╣")
+
+        for user_id, reason, afk_time, return_time in afk_data:
+            try:
+                guild = bot.get_guild(AFK_GUILD_ID) or bot.get_guild(GUILD_ID)
+                member = None
+                if guild:
+                    member = guild.get_member(user_id)
+                
+                if member:
+                    user_name = member.display_name[:18]
+                else:
+                    user = await bot.fetch_user(user_id)
+                    user_name = (user.global_name or user.name)[:18]
+            except:
+                user_name = "Unknown"
+
+            dt_return = datetime.datetime.fromisoformat(return_time)
+            now = datetime.datetime.now()
+            remaining = dt_return - now
+
+            if remaining.total_seconds() > 0:
+                hours = int(remaining.total_seconds() // 3600)
+                mins = int((remaining.total_seconds() % 3600) // 60)
+                time_left = f"{hours}ч {mins}м" if hours > 0 else f"{mins}м"
+            else:
+                time_left = "Скоро"
+
+            reason_short = reason[:28] if len(reason) <= 28 else reason[:25] + "..."
+
+            table_lines.append(f"║ 👤 {user_name:<18} │ ⏱️ {time_left:<8}                    ║")
+            table_lines.append(f"║ 📝 Причина: {reason_short:<45} ║")
+            table_lines.append("║" + "─" * 66 + "║")
+
+        table_lines.append("╚══════════════════════════════════════════════════════════════════╝")
+        table_lines.append("```")
 
         embed = discord.Embed(
             title="📋 АФК Панель",
-            description="Загрузка списка...",
+            description="\n".join(table_lines),
             color=discord.Color.gold()
         )
-
-        message = await interaction.followup.send(embed=embed)
-        bot.afklist_message = message
-        bot.afklist_channel = interaction.channel
-
-        await bot.update_afk_panel()
+        embed.set_footer(text=f"Обновлено: {datetime.datetime.now().strftime('%H:%M:%S')} | Всего в АФК: {len(afk_data)}")
+        msg = await interaction.followup.send(embed=embed, ephemeral=True)
+        asyncio.create_task(bot._delete_after_custom(msg, 180))
 
     except Exception as e:
         try:
             msg = await interaction.followup.send(
-                f"Ошибка при создании АФК панели: {str(e)}",
+                f"Ошибка при получении АФК панели: {str(e)}",
                 ephemeral=True
             )
+            asyncio.create_task(bot._delete_after_custom(msg, 180))
         except:
             pass
         print(f"Ошибка в afklist: {e}")
