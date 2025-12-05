@@ -6,6 +6,28 @@ import datetime
 import asyncio
 import os
 from dotenv import load_dotenv
+from flask import Flask
+import threading
+
+# ========== FLASK СЕРВЕР ДЛЯ RENDER ==========
+app = Flask(__name__)
+
+@app.route('/')
+def health_check():
+    """Проверка здоровья для Render"""
+    return "Bot is running!", 200
+
+def run_flask():
+    """Запустить Flask на порту 10000"""
+    port = int(os.getenv("PORT", 10000))
+    app.run(host="0.0.0.0", port=port, debug=False)
+
+# Запустить Flask в отдельном потоке ДО запуска бота
+flask_thread = threading.Thread(target=run_flask, daemon=True)
+flask_thread.start()
+print(f"🌐 Flask сервер запущен на порту {os.getenv('PORT', 10000)}")
+
+# ========== КОНЕЦ FLASK КОНФИГУРАЦИИ ==========
 
 # Загружаем токен из .env файла
 load_dotenv()
@@ -48,18 +70,18 @@ class AFKModal(discord.ui.Modal, title="Установить статус АФК
             try:
                 minutes = int(self.return_time.value)
                 if minutes <= 0 or minutes > 1440:
-                    await interaction.response.send_message(
+                    msg = await interaction.response.send_message(
                         "Ошибка: укажите время от 1 до 1440 минут (24 часа).",
-                        ephemeral=True,
-                        delete_after=180
+                        ephemeral=True
                     )
+                    asyncio.create_task(self.bot_instance._delete_after_custom(msg, 180))
                     return
             except ValueError:
-                await interaction.response.send_message(
+                msg = await interaction.response.send_message(
                     "Ошибка: время должно быть числом.",
-                    ephemeral=True,
-                    delete_after=180
+                    ephemeral=True
                 )
+                asyncio.create_task(self.bot_instance._delete_after_custom(msg, 180))
                 return
 
             now = datetime.datetime.now()
@@ -73,15 +95,15 @@ class AFKModal(discord.ui.Modal, title="Установить статус АФК
 
             msg = await interaction.response.send_message(
                 f"✅ Твой АФК статус установлен на {minutes} минут.\n**Причина:** {self.reason.value}",
-                ephemeral=True,
-                delete_after=180
+                ephemeral=True
             )
+            asyncio.create_task(self.bot_instance._delete_after_custom(msg, 180))
         except Exception as e:
-            await interaction.response.send_message(
+            msg = await interaction.response.send_message(
                 f"Ошибка при установке АФК: {str(e)}",
-                ephemeral=True,
-                delete_after=180
+                ephemeral=True
             )
+            asyncio.create_task(self.bot_instance._delete_after_custom(msg, 180))
             print(f"Ошибка в AFKModal: {e}")
 
 class BroadcastModal(discord.ui.Modal, title="Отправить сообщение"):
@@ -114,28 +136,28 @@ class BroadcastModal(discord.ui.Modal, title="Отправить сообщен�
                 repeat = int(self.repeat_count.value)
                 channel_id = int(self.channel_id.value)
             except ValueError:
-                await interaction.response.send_message(
+                msg = await interaction.response.send_message(
                     "Ошибка: ID канала и количество должны быть числами.",
-                    ephemeral=True,
-                    delete_after=180
+                    ephemeral=True
                 )
+                asyncio.create_task(self.bot_instance._delete_after_custom(msg, 180))
                 return
 
             if repeat <= 0 or repeat > 100:
-                await interaction.response.send_message(
+                msg = await interaction.response.send_message(
                     "Ошибка: количество должно быть от 1 до 100.",
-                    ephemeral=True,
-                    delete_after=180
+                    ephemeral=True
                 )
+                asyncio.create_task(self.bot_instance._delete_after_custom(msg, 180))
                 return
 
             channel = interaction.guild.get_channel(channel_id)
             if not channel:
-                await interaction.response.send_message(
+                msg = await interaction.response.send_message(
                     "Ошибка: канал не найден. Проверьте ID.",
-                    ephemeral=True,
-                    delete_after=180
+                    ephemeral=True
                 )
+                asyncio.create_task(self.bot_instance._delete_after_custom(msg, 180))
                 return
 
             await interaction.response.defer(ephemeral=True)
@@ -155,13 +177,16 @@ class BroadcastModal(discord.ui.Modal, title="Отправить сообщен�
                 color=discord.Color.green()
             )
 
-            await interaction.followup.send(embed=embed, ephemeral=True)
+            msg = await interaction.followup.send(embed=embed, ephemeral=True)
         except Exception as e:
-            await interaction.response.send_message(
-                f"Ошибка при отправке сообщений: {str(e)}",
-                ephemeral=True,
-                delete_after=180
-            )
+            try:
+                msg = await interaction.followup.send(
+                    f"Ошибка при отправке сообщений: {str(e)}",
+                    ephemeral=True
+                )
+                asyncio.create_task(self.bot_instance._delete_after_custom(msg, 180))
+            except:
+                pass
             print(f"Ошибка в BroadcastModal: {e}")
 
     async def _delete_after(self, message, delay):
@@ -220,7 +245,7 @@ class MyBot(commands.Bot):
             except Exception as e:
                 print(f"Ошибка синхронизации команд: {e}")
 
-        print(f"Бот {self.user} запущен и готов к работе!")
+        print(f"✅ Бот {self.user} запущен и готов к работе!")
         self.cleanup_afk_list.start()
         self.update_afk_panel.start()
 
@@ -288,7 +313,7 @@ class MyBot(commands.Bot):
                 return
 
             table_lines = []
-            table_lines.append("```
+            table_lines.append("```")
             table_lines.append("╔══════════════════════════════════════════════════════════════════╗")
             table_lines.append("║                    📋 СПИСОК АФК                                ║")
             table_lines.append("╠══════════════════════════════════════════════════════════════════╣")
@@ -300,7 +325,6 @@ class MyBot(commands.Bot):
                     if guild:
                         member = guild.get_member(user_id)
                     
-                    # Приоритет: display_name (ник на сервере), потом global_name, потом username
                     if member:
                         user_name = member.display_name[:18]
                     else:
@@ -355,13 +379,14 @@ class AfkControlView(discord.ui.View):
             
             await self.bot_instance.update_afk_panel()
             
-            await interaction.followup.send("✅ АФК-лист обновлён!", ephemeral=True, delete_after=5)
+            msg = await interaction.followup.send("✅ АФК-лист обновлён!", ephemeral=True)
+            asyncio.create_task(self.bot_instance._delete_after_custom(msg, 5))
         except Exception as e:
-            await interaction.followup.send(
+            msg = await interaction.followup.send(
                 f"Ошибка при обновлении АФК панели: {str(e)}",
-                ephemeral=True,
-                delete_after=15
+                ephemeral=True
             )
+            asyncio.create_task(self.bot_instance._delete_after_custom(msg, 15))
 
     @discord.ui.button(label="😴 AFK", style=discord.ButtonStyle.secondary, custom_id="open_afk_modal")
     async def open_afk_modal(self, interaction: discord.Interaction, button: discord.ui.Button):
@@ -383,7 +408,7 @@ class InfoView(discord.ui.View):
     @discord.ui.button(label="📚 Справка", style=discord.ButtonStyle.primary, custom_id="info_help")
     async def help_button(self, interaction: discord.Interaction, button: discord.ui.Button):
         if interaction.user.id != self.user.id:
-            msg = await interaction.response.send_message("Эта кнопка не для тебя!", ephemeral=True, delete_after=5)
+            msg = await interaction.response.send_message("Эта кнопка не для тебя!", ephemeral=True)
             asyncio.create_task(bot._delete_after_custom(msg, 5))
             return
 
@@ -423,7 +448,7 @@ class InfoView(discord.ui.View):
     @discord.ui.button(label="🛑 Закрыть", style=discord.ButtonStyle.danger, custom_id="info_close")
     async def close_button(self, interaction: discord.Interaction, button: discord.ui.Button):
         if interaction.user.id != self.user.id:
-            msg = await interaction.response.send_message("Эта кнопка не для тебя!", ephemeral=True, delete_after=5)
+            msg = await interaction.response.send_message("Эта кнопка не для тебя!", ephemeral=True)
             asyncio.create_task(bot._delete_after_custom(msg, 5))
             return
         await interaction.response.defer()
@@ -491,14 +516,17 @@ async def help_cmd(interaction: discord.Interaction):
             color=discord.Color.blurple()
         )
         embed.set_footer(text="SchizoBot v3.0 | Показаны только доступные тебе команды")
-        msg = await interaction.response.send_message(embed=embed, ephemeral=True, delete_after=180)
+        msg = await interaction.response.send_message(embed=embed, ephemeral=True)
         asyncio.create_task(bot._delete_after_custom(msg, 180))
     except Exception as e:
-        await interaction.response.send_message(
-            "Ошибка при загрузке справки.",
-            ephemeral=True,
-            delete_after=180
-        )
+        try:
+            msg = await interaction.response.send_message(
+                "Ошибка при загрузке справки.",
+                ephemeral=True
+            )
+            asyncio.create_task(bot._delete_after_custom(msg, 180))
+        except:
+            pass
         print(f"Ошибка в help_cmd: {e}")
 
 # ---------- КОМАНДА /INFO ----------
@@ -518,13 +546,16 @@ async def info(interaction: discord.Interaction):
         embed.set_thumbnail(url=bot.user.avatar.url if bot.user.avatar else bot.user.default_avatar.url)
         embed.set_footer(text="SchizoBot v3.0 | 2025")
         view = InfoView(bot, interaction.user)
-        msg = await interaction.response.send_message(embed=embed, view=view, ephemeral=True)
+        await interaction.response.send_message(embed=embed, view=view, ephemeral=True)
     except Exception as e:
-        msg = await interaction.response.send_message(
-            "Ошибка при загрузке информации.",
-            ephemeral=True,
-            delete_after=180
-        )
+        try:
+            msg = await interaction.response.send_message(
+                "Ошибка при загрузке информации.",
+                ephemeral=True
+            )
+            asyncio.create_task(bot._delete_after_custom(msg, 180))
+        except:
+            pass
         print(f"Ошибка в info: {e}")
 
 # ---------- КОМАНДА /AFK ----------
@@ -547,8 +578,7 @@ async def afk(interaction: discord.Interaction, reason: str = None, minutes: int
         if minutes <= 0 or minutes > 1440:
             msg = await interaction.response.send_message(
                 "Ошибка: укажите время от 1 до 1440 минут (24 часа).",
-                ephemeral=True,
-                delete_after=180
+                ephemeral=True
             )
             asyncio.create_task(bot._delete_after_custom(msg, 180))
             return
@@ -564,17 +594,19 @@ async def afk(interaction: discord.Interaction, reason: str = None, minutes: int
 
         msg = await interaction.response.send_message(
             f"✅ Твой АФК статус установлен на {minutes} минут.\n**Причина:** {reason}",
-            ephemeral=True,
-            delete_after=180
+            ephemeral=True
         )
         asyncio.create_task(bot._delete_after_custom(msg, 180))
 
     except Exception as e:
-        msg = await interaction.response.send_message(
-            f"Ошибка при установке АФК: {str(e)}",
-            ephemeral=True,
-            delete_after=180
-        )
+        try:
+            msg = await interaction.response.send_message(
+                f"Ошибка при установке АФК: {str(e)}",
+                ephemeral=True
+            )
+            asyncio.create_task(bot._delete_after_custom(msg, 180))
+        except:
+            pass
         print(f"Ошибка в afk: {e}")
 
 # ---------- КОМАНДА /UNAFK ----------
@@ -595,8 +627,7 @@ async def unafk(interaction: discord.Interaction):
         if not result:
             msg = await interaction.response.send_message(
                 "Ты не находишься в АФК списке.",
-                ephemeral=True,
-                delete_after=180
+                ephemeral=True
             )
             asyncio.create_task(bot._delete_after_custom(msg, 180))
             return
@@ -609,17 +640,19 @@ async def unafk(interaction: discord.Interaction):
 
         msg = await interaction.response.send_message(
             "✅ Ты убран из АФК списка.",
-            ephemeral=True,
-            delete_after=180
+            ephemeral=True
         )
         asyncio.create_task(bot._delete_after_custom(msg, 180))
 
     except Exception as e:
-        msg = await interaction.response.send_message(
-            f"Ошибка при удалении из АФК: {str(e)}",
-            ephemeral=True,
-            delete_after=180
-        )
+        try:
+            msg = await interaction.response.send_message(
+                f"Ошибка при удалении из АФК: {str(e)}",
+                ephemeral=True
+            )
+            asyncio.create_task(bot._delete_after_custom(msg, 180))
+        except:
+            pass
         print(f"Ошибка в unafk: {e}")
 
 # ---------- КОМАНДА /AFKLIST ----------
@@ -635,8 +668,7 @@ async def afklist(interaction: discord.Interaction):
         if bot.afklist_message is not None:
             msg = await interaction.response.send_message(
                 "⚠️ АФК панель уже создана! Используй её же для обновлений.",
-                ephemeral=True,
-                delete_after=180
+                ephemeral=True
             )
             asyncio.create_task(bot._delete_after_custom(msg, 180))
             return
@@ -656,10 +688,13 @@ async def afklist(interaction: discord.Interaction):
         await bot.update_afk_panel()
 
     except Exception as e:
-        msg = await interaction.followup.send(
-            f"Ошибка при создании АФК панели: {str(e)}",
-            ephemeral=True
-        )
+        try:
+            msg = await interaction.followup.send(
+                f"Ошибка при создании АФК панели: {str(e)}",
+                ephemeral=True
+            )
+        except:
+            pass
         print(f"Ошибка в afklist: {e}")
 
 # ---------- КОМАНДА /WARN ----------
@@ -679,8 +714,7 @@ async def warn(interaction: discord.Interaction, user: discord.User, reason: str
         if len(reason) > 200:
             msg = await interaction.response.send_message(
                 "Ошибка: причина слишком длинная (максимум 200 символов).",
-                ephemeral=True,
-                delete_after=180
+                ephemeral=True
             )
             asyncio.create_task(bot._delete_after_custom(msg, 180))
             return
@@ -704,15 +738,18 @@ async def warn(interaction: discord.Interaction, user: discord.User, reason: str
         embed.add_field(name="Всего варнов", value=f"{warn_count}/3", inline=True)
         embed.set_footer(text="SchizoBot v3.0")
 
-        msg = await interaction.response.send_message(embed=embed, delete_after=180)
+        msg = await interaction.response.send_message(embed=embed)
         asyncio.create_task(bot._delete_after_custom(msg, 180))
 
     except Exception as e:
-        msg = await interaction.response.send_message(
-            f"Ошибка при выдаче варна: {str(e)}",
-            ephemeral=True,
-            delete_after=180
-        )
+        try:
+            msg = await interaction.response.send_message(
+                f"Ошибка при выдаче варна: {str(e)}",
+                ephemeral=True
+            )
+            asyncio.create_task(bot._delete_after_custom(msg, 180))
+        except:
+            pass
         print(f"Ошибка в warn: {e}")
 
 # ---------- КОМАНДА /WARNINFO ----------
@@ -764,15 +801,18 @@ async def warninfo(interaction: discord.Interaction, user: discord.User = None):
 
         embed.set_footer(text=f"ID пользователя: {target.id}")
 
-        msg = await interaction.response.send_message(embed=embed, ephemeral=False, delete_after=180)
+        msg = await interaction.response.send_message(embed=embed, ephemeral=False)
         asyncio.create_task(bot._delete_after_custom(msg, 180))
 
     except Exception as e:
-        msg = await interaction.response.send_message(
-            f"Ошибка при получении информации о варнах: {str(e)}",
-            ephemeral=True,
-            delete_after=180
-        )
+        try:
+            msg = await interaction.response.send_message(
+                f"Ошибка при получении информации о варнах: {str(e)}",
+                ephemeral=True
+            )
+            asyncio.create_task(bot._delete_after_custom(msg, 180))
+        except:
+            pass
         print(f"Ошибка в warninfo: {e}")
 
 # ---------- КОМАНДА /DWARN ----------
@@ -795,8 +835,7 @@ async def dwarn(interaction: discord.Interaction, warn_id: int):
         if not warn_info:
             msg = await interaction.response.send_message(
                 f"Ошибка: варн с ID {warn_id} не найден.",
-                ephemeral=True,
-                delete_after=180
+                ephemeral=True
             )
             asyncio.create_task(bot._delete_after_custom(msg, 180))
             return
@@ -830,15 +869,18 @@ async def dwarn(interaction: discord.Interaction, warn_id: int):
         embed.add_field(name="Тип нарушения", value=violation_type, inline=False)
         embed.add_field(name="Оставшиеся варны", value=f"{remaining_warns}/3", inline=False)
 
-        msg = await interaction.response.send_message(embed=embed, delete_after=180)
+        msg = await interaction.response.send_message(embed=embed)
         asyncio.create_task(bot._delete_after_custom(msg, 180))
 
     except Exception as e:
-        msg = await interaction.response.send_message(
-            f"Ошибка при удалении варна: {str(e)}",
-            ephemeral=True,
-            delete_after=180
-        )
+        try:
+            msg = await interaction.response.send_message(
+                f"Ошибка при удалении варна: {str(e)}",
+                ephemeral=True
+            )
+            asyncio.create_task(bot._delete_after_custom(msg, 180))
+        except:
+            pass
         print(f"Ошибка в dwarn: {e}")
 
 # ---------- КОМАНДА /BAN ----------
@@ -858,8 +900,7 @@ async def ban(interaction: discord.Interaction, user: discord.User, reason: str 
         if isinstance(user, discord.Member) and user.top_role >= interaction.user.top_role:
             msg = await interaction.response.send_message(
                 "Ошибка: вы не можете забанить пользователя с такой же или выше ролью.",
-                ephemeral=True,
-                delete_after=180
+                ephemeral=True
             )
             asyncio.create_task(bot._delete_after_custom(msg, 180))
             return
@@ -873,7 +914,7 @@ async def ban(interaction: discord.Interaction, user: discord.User, reason: str 
         )
         embed.add_field(name="Администратор", value=interaction.user.mention, inline=True)
 
-        msg = await interaction.response.send_message(embed=embed, delete_after=180)
+        msg = await interaction.response.send_message(embed=embed)
         asyncio.create_task(bot._delete_after_custom(msg, 180))
 
         try:
@@ -882,18 +923,23 @@ async def ban(interaction: discord.Interaction, user: discord.User, reason: str 
             pass
 
     except discord.Forbidden:
-        msg = await interaction.response.send_message(
-            "Ошибка: у бота недостаточно прав для бана.",
-            ephemeral=True,
-            delete_after=180
-        )
-        asyncio.create_task(bot._delete_after_custom(msg, 180))
+        try:
+            msg = await interaction.response.send_message(
+                "Ошибка: у бота недостаточно прав для бана.",
+                ephemeral=True
+            )
+            asyncio.create_task(bot._delete_after_custom(msg, 180))
+        except:
+            pass
     except Exception as e:
-        msg = await interaction.response.send_message(
-            f"Ошибка при бане: {str(e)}",
-            ephemeral=True,
-            delete_after=180
-        )
+        try:
+            msg = await interaction.response.send_message(
+                f"Ошибка при бане: {str(e)}",
+                ephemeral=True
+            )
+            asyncio.create_task(bot._delete_after_custom(msg, 180))
+        except:
+            pass
         print(f"Ошибка в ban: {e}")
 
 # ---------- КОМАНДА /UNBAN ----------
@@ -917,22 +963,27 @@ async def unban(interaction: discord.Interaction, user_id: int):
         )
         embed.add_field(name="Администратор", value=interaction.user.mention, inline=True)
 
-        msg = await interaction.response.send_message(embed=embed, delete_after=180)
+        msg = await interaction.response.send_message(embed=embed)
         asyncio.create_task(bot._delete_after_custom(msg, 180))
 
     except discord.NotFound:
-        msg = await interaction.response.send_message(
-            "Ошибка: пользователь не найден или не забанен.",
-            ephemeral=True,
-            delete_after=180
-        )
-        asyncio.create_task(bot._delete_after_custom(msg, 180))
+        try:
+            msg = await interaction.response.send_message(
+                "Ошибка: пользователь не найден или не забанен.",
+                ephemeral=True
+            )
+            asyncio.create_task(bot._delete_after_custom(msg, 180))
+        except:
+            pass
     except Exception as e:
-        msg = await interaction.response.send_message(
-            f"Ошибка при разбане: {str(e)}",
-            ephemeral=True,
-            delete_after=180
-        )
+        try:
+            msg = await interaction.response.send_message(
+                f"Ошибка при разбане: {str(e)}",
+                ephemeral=True
+            )
+            asyncio.create_task(bot._delete_after_custom(msg, 180))
+        except:
+            pass
         print(f"Ошибка в unban: {e}")
 
 # ---------- КОМАНДА /TIMEOUT ----------
@@ -953,8 +1004,7 @@ async def timeout(interaction: discord.Interaction, user: discord.Member, minute
         if user.top_role >= interaction.user.top_role:
             msg = await interaction.response.send_message(
                 "Ошибка: вы не можете замутить пользователя с такой же или выше ролью.",
-                ephemeral=True,
-                delete_after=180
+                ephemeral=True
             )
             asyncio.create_task(bot._delete_after_custom(msg, 180))
             return
@@ -962,8 +1012,7 @@ async def timeout(interaction: discord.Interaction, user: discord.Member, minute
         if minutes <= 0 or minutes > 40320:
             msg = await interaction.response.send_message(
                 "Ошибка: укажите время от 1 до 40320 минут (28 дней).",
-                ephemeral=True,
-                delete_after=180
+                ephemeral=True
             )
             asyncio.create_task(bot._delete_after_custom(msg, 180))
             return
@@ -980,22 +1029,27 @@ async def timeout(interaction: discord.Interaction, user: discord.Member, minute
         )
         embed.add_field(name="Администратор", value=interaction.user.mention, inline=True)
 
-        msg = await interaction.response.send_message(embed=embed, delete_after=180)
+        msg = await interaction.response.send_message(embed=embed)
         asyncio.create_task(bot._delete_after_custom(msg, 180))
 
     except discord.Forbidden:
-        msg = await interaction.response.send_message(
-            "Ошибка: у бота недостаточно прав для мута.",
-            ephemeral=True,
-            delete_after=180
-        )
-        asyncio.create_task(bot._delete_after_custom(msg, 180))
+        try:
+            msg = await interaction.response.send_message(
+                "Ошибка: у бота недостаточно прав для мута.",
+                ephemeral=True
+            )
+            asyncio.create_task(bot._delete_after_custom(msg, 180))
+        except:
+            pass
     except Exception as e:
-        msg = await interaction.response.send_message(
-            f"Ошибка при выдаче мута: {str(e)}",
-            ephemeral=True,
-            delete_after=180
-        )
+        try:
+            msg = await interaction.response.send_message(
+                f"Ошибка при выдаче мута: {str(e)}",
+                ephemeral=True
+            )
+            asyncio.create_task(bot._delete_after_custom(msg, 180))
+        except:
+            pass
         print(f"Ошибка в timeout: {e}")
 
 # ---------- КОМАНДА /UNTIMEOUT ----------
@@ -1011,8 +1065,7 @@ async def untimeout(interaction: discord.Interaction, user: discord.Member):
         if not user.is_timed_out():
             msg = await interaction.response.send_message(
                 f"Ошибка: {user.mention} не находится в муте.",
-                ephemeral=True,
-                delete_after=180
+                ephemeral=True
             )
             asyncio.create_task(bot._delete_after_custom(msg, 180))
             return
@@ -1026,22 +1079,27 @@ async def untimeout(interaction: discord.Interaction, user: discord.Member):
         )
         embed.add_field(name="Администратор", value=interaction.user.mention, inline=True)
 
-        msg = await interaction.response.send_message(embed=embed, delete_after=180)
+        msg = await interaction.response.send_message(embed=embed)
         asyncio.create_task(bot._delete_after_custom(msg, 180))
 
     except discord.Forbidden:
-        msg = await interaction.response.send_message(
-            "Ошибка: у бота недостаточно прав для снятия мута.",
-            ephemeral=True,
-            delete_after=180
-        )
-        asyncio.create_task(bot._delete_after_custom(msg, 180))
+        try:
+            msg = await interaction.response.send_message(
+                "Ошибка: у бота недостаточно прав для снятия мута.",
+                ephemeral=True
+            )
+            asyncio.create_task(bot._delete_after_custom(msg, 180))
+        except:
+            pass
     except Exception as e:
-        msg = await interaction.response.send_message(
-            f"Ошибка при снятии мута: {str(e)}",
-            ephemeral=True,
-            delete_after=180
-        )
+        try:
+            msg = await interaction.response.send_message(
+                f"Ошибка при снятии мута: {str(e)}",
+                ephemeral=True
+            )
+            asyncio.create_task(bot._delete_after_custom(msg, 180))
+        except:
+            pass
         print(f"Ошибка в untimeout: {e}")
 
 # ---------- КОМАНДА /KICK ----------
@@ -1061,8 +1119,7 @@ async def kick(interaction: discord.Interaction, user: discord.Member, reason: s
         if user.top_role >= interaction.user.top_role:
             msg = await interaction.response.send_message(
                 "Ошибка: вы не можете выгнать пользователя с такой же или выше ролью.",
-                ephemeral=True,
-                delete_after=180
+                ephemeral=True
             )
             asyncio.create_task(bot._delete_after_custom(msg, 180))
             return
@@ -1076,7 +1133,7 @@ async def kick(interaction: discord.Interaction, user: discord.Member, reason: s
         )
         embed.add_field(name="Администратор", value=interaction.user.mention, inline=True)
 
-        msg = await interaction.response.send_message(embed=embed, delete_after=180)
+        msg = await interaction.response.send_message(embed=embed)
         asyncio.create_task(bot._delete_after_custom(msg, 180))
 
         try:
@@ -1085,18 +1142,23 @@ async def kick(interaction: discord.Interaction, user: discord.Member, reason: s
             pass
 
     except discord.Forbidden:
-        msg = await interaction.response.send_message(
-            "Ошибка: у бота недостаточно прав для кика.",
-            ephemeral=True,
-            delete_after=180
-        )
-        asyncio.create_task(bot._delete_after_custom(msg, 180))
+        try:
+            msg = await interaction.response.send_message(
+                "Ошибка: у бота недостаточно прав для кика.",
+                ephemeral=True
+            )
+            asyncio.create_task(bot._delete_after_custom(msg, 180))
+        except:
+            pass
     except Exception as e:
-        msg = await interaction.response.send_message(
-            f"Ошибка при кике: {str(e)}",
-            ephemeral=True,
-            delete_after=180
-        )
+        try:
+            msg = await interaction.response.send_message(
+                f"Ошибка при кике: {str(e)}",
+                ephemeral=True
+            )
+            asyncio.create_task(bot._delete_after_custom(msg, 180))
+        except:
+            pass
         print(f"Ошибка в kick: {e}")
 
 # ---------- КОМАНДА /BROADCAST ----------
@@ -1111,37 +1173,37 @@ async def broadcast(interaction: discord.Interaction):
     try:
         await interaction.response.send_modal(BroadcastModal(bot))
     except Exception as e:
-        msg = await interaction.response.send_message(
-            f"Ошибка при открытии формы broadcast: {str(e)}",
-            ephemeral=True,
-            delete_after=180
-        )
+        try:
+            msg = await interaction.response.send_message(
+                f"Ошибка при открытии формы broadcast: {str(e)}",
+                ephemeral=True
+            )
+            asyncio.create_task(bot._delete_after_custom(msg, 180))
+        except:
+            pass
         print(f"Ошибка в broadcast: {e}")
 
 # ---------- ОБРАБОТЧИК ОШИБОК КОМАНД ----------
 
 @bot.tree.error
 async def on_app_command_error(interaction: discord.Interaction, error: app_commands.AppCommandError):
+    error_msg = "Произошла непредвиденная ошибка."
+    
     if isinstance(error, app_commands.MissingPermissions):
-        msg = await interaction.response.send_message(
-            "Ошибка: у вас недостаточно прав для использования этой команды.",
-            ephemeral=True,
-            delete_after=180
-        )
-        asyncio.create_task(bot._delete_after_custom(msg, 180))
+        error_msg = "Ошибка: у вас недостаточно прав для использования этой команды."
     elif isinstance(error, app_commands.CommandOnCooldown):
-        msg = await interaction.response.send_message(
-            f"Команда на перезарядке. Попробуйте через {error.retry_after:.0f} секунд.",
-            ephemeral=True,
-            delete_after=180
-        )
+        error_msg = f"Команда на перезарядке. Попробуйте через {error.retry_after:.0f} секунд."
+    
+    try:
+        if interaction.response.is_done():
+            msg = await interaction.followup.send(error_msg, ephemeral=True)
+        else:
+            msg = await interaction.response.send_message(error_msg, ephemeral=True)
         asyncio.create_task(bot._delete_after_custom(msg, 180))
-    else:
-        msg = await interaction.response.send_message(
-            "Произошла непредвиденная ошибка.",
-            ephemeral=True,
-            delete_after=180
-        )
+    except Exception as e:
+        print(f"Ошибка в обработчике ошибок: {e}")
+    
+    if not isinstance(error, (app_commands.MissingPermissions, app_commands.CommandOnCooldown)):
         print(f"Ошибка команды: {error}")
 
 if __name__ == "__main__":
